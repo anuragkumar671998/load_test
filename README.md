@@ -16,7 +16,11 @@ sudo python3 load_test.py
 
 
 What's New in v2.2
-FeatureDescriptiondpkg --configure -aRuns every 10 packages to fix interrupted installsapt-get install -fRuns after dpkg to fix broken dependenciesInitial fixRuns both commands at startup before any installsFinal fixRuns both commands at the end before exit
+FeatureDescription
+dpkg --configure -a
+Runs every 10 packages to fix interrupted installs
+apt-get install -f
+Runs after dpkg to fix broken dependencies Initial fix Runs both commands at startup before any installs Final fixRuns both commands at the end before exit
 Workflow Diagram
 ┌─────────────────────────────────────────────────────────────────┐
 │                        WORKFLOW v2.2                            │
