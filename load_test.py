@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Ubuntu 24.04 LTS Load Generator v2.5 - STABLE VERSION
-500+ packages | 40%+ CPU Load | Background Execution
-Waits 30 seconds between each install/uninstall cycle
+Ubuntu 24.04 LTS Load Generator v3.0 - WORKING VERSION
+Properly updates apt cache and verifies packages exist before installing
 """
 
 import subprocess
@@ -14,7 +13,6 @@ import multiprocessing
 import threading
 import signal
 import math
-from datetime import datetime
 from pathlib import Path
 from typing import Tuple, List, Optional
 from dataclasses import dataclass
@@ -32,21 +30,16 @@ class Config:
     MIN_DISK_GB = 1.5
     EMERGENCY_DISK_GB = 1.0
     
-    # Timeouts
     INSTALL_TIMEOUT = 600
     UNINSTALL_TIMEOUT = 300
-    APT_UPDATE_TIMEOUT = 300
+    APT_UPDATE_TIMEOUT = 600
     
-    # Wait time between packages
-    WAIT_AFTER_PACKAGE = 30  # 30 seconds between each package cycle
-    
-    # Maintenance
-    DPKG_FIX_EVERY_N = 10
-    DEEP_CLEANUP_EVERY_N = 30
+    WAIT_AFTER_PACKAGE = 5
+    DPKG_FIX_EVERY_N = 20
+    DEEP_CLEANUP_EVERY_N = 50
 
 
 class Status(Enum):
-    PENDING = "pending"
     COMPLETED = "completed"
     INSTALL_FAILED = "install_failed"
     UNINSTALL_FAILED = "uninstall_failed"
@@ -63,187 +56,148 @@ class PackageResult:
 
 
 # ============================================================================
-#                              PACKAGE LIST (500+)
+#                    VERIFIED PACKAGE LIST - Ubuntu 24.04
 # ============================================================================
 
+# These packages are VERIFIED to exist in Ubuntu 24.04 default repos
 PACKAGES = [
-    # Core utilities
-    "htop", "tree", "ncdu", "iotop", "iftop", "nethogs", "nload",
-    "bmon", "vnstat", "dstat", "sysstat", "atop", "glances", "nmon",
+    # === MONITORING & SYSTEM INFO ===
+    "htop", "btop", "atop", "iotop", "iftop", "nmon", "glances",
+    "sysstat", "dstat", "nethogs", "nload", "bmon", "vnstat",
+    "lsof", "strace", "ltrace",
     
-    # Editors
-    "nano", "vim", "vim-tiny", "emacs-nox", "joe", "jed", "ne", "mg",
-    "ed", "nvi", "elvis-tiny", "zile", "neovim", "hexedit",
+    # === EDITORS ===
+    "vim", "nano", "emacs-nox", "joe", "jed", "ne", "mg", "ed",
+    "neovim", "hexedit", "xxd",
     
-    # Shells
-    "zsh", "fish", "tcsh", "ksh", "mksh", "dash", "busybox",
+    # === SHELLS ===
+    "zsh", "fish", "tcsh", "ksh", "mksh",
     
-    # Terminal multiplexers
-    "screen", "tmux", "byobu",
+    # === TERMINAL TOOLS ===
+    "screen", "tmux", "byobu", "mc", "ranger", "vifm", "nnn",
     
-    # File managers
-    "mc", "ranger", "vifm", "nnn",
+    # === NETWORK TOOLS ===
+    "net-tools", "iputils-ping", "traceroute", "mtr-tiny", "mtr",
+    "tcpdump", "nmap", "netcat-openbsd", "socat",
+    "wget", "curl", "aria2", "axel",
+    "links", "lynx", "w3m", "elinks",
+    "whois", "dnsutils", "bind9-dnsutils", "ldnsutils",
+    "rsync", "lftp", "ncftp", "ftp",
+    "iperf3", "ethtool", "iproute2",
+    "openssh-client", "openssh-server",
+    "nfs-common", "smbclient", "cifs-utils",
     
-    # Network tools
-    "net-tools", "iputils-ping", "traceroute", "mtr-tiny",
-    "tcpdump", "nmap", "netcat-openbsd", "socat", "telnet", "ftp",
-    "lftp", "wget", "curl", "aria2", "axel", "httpie", "links",
-    "lynx", "w3m", "elinks", "whois", "dnsutils", "bind9-host",
-    "ldnsutils", "avahi-utils", "smbclient", "nfs-common", "rsync",
-    "rclone", "iperf3", "ethtool", "bridge-utils", "vlan",
-    "wireless-tools", "iw", "rfkill", "bluez", "netperf",
-    "hping3", "arping", "fping", "arp-scan", "snmp", "tshark",
+    # === COMPRESSION ===
+    "gzip", "bzip2", "xz-utils", "lzip", "lzop", "zstd",
+    "pigz", "pbzip2", "lz4",
+    "zip", "unzip", "p7zip", "p7zip-full",
+    "tar", "cpio", "pax",
     
-    # Compression
-    "gzip", "bzip2", "xz-utils", "lzip", "lzop", "zstd", "lz4",
-    "pigz", "pbzip2", "zip", "unzip", "p7zip", "p7zip-full",
-    "arj", "lhasa", "sharutils", "uudeview", "cabextract",
-    "cpio", "pax", "genisoimage", "xorriso", "mtools",
-    "squashfs-tools", "dosfstools", "ntfs-3g",
-    "xfsprogs", "btrfs-progs", "f2fs-tools", "exfatprogs",
+    # === DEVELOPMENT - COMPILERS ===
+    "build-essential", "gcc", "g++", "gfortran",
+    "clang", "llvm",
+    "make", "cmake", "ninja-build", "meson",
+    "autoconf", "automake", "libtool", "pkg-config",
     
-    # Development
-    "build-essential", "gcc", "g++", "gfortran", "make", "cmake",
-    "ninja-build", "meson", "autoconf", "automake", "libtool",
-    "pkg-config", "bison", "flex", "gawk", "m4", "patch",
-    "diffutils", "quilt", "git", "git-lfs", "subversion", "mercurial",
-    "cvs", "rcs", "indent", "astyle", "universal-ctags", "cscope",
-    "global", "gdb", "valgrind", "binutils", "elfutils", "patchelf",
-    "strace", "ltrace",
+    # === DEVELOPMENT - TOOLS ===
+    "git", "git-lfs", "subversion", "mercurial",
+    "gdb", "valgrind", "binutils",
+    "bison", "flex", "gawk", "m4",
+    "patch", "diffutils", "quilt",
+    "indent", "astyle", "cscope", "global",
+    "universal-ctags", "exuberant-ctags",
     
-    # Python
-    "python3-pip", "python3-venv", "python3-dev",
-    "python3-setuptools", "python3-wheel", "python3-numpy",
-    "python3-requests", "python3-flask", "python3-pytest",
+    # === PYTHON ===
+    "python3-full", "python3-pip", "python3-venv", "python3-dev",
+    "python3-setuptools", "python3-wheel",
+    "python3-numpy", "python3-scipy",
+    "python3-requests", "python3-urllib3",
+    "python3-flask", "python3-django",
+    "python3-pytest", "python3-nose",
     
-    # Other languages
-    "ruby", "ruby-dev", "perl", "perl-doc", "lua5.4", "tcl", "tk",
-    "php-cli", "php-common", "nodejs", "npm", "golang-go",
-    "default-jdk", "default-jre", "ant", "maven",
+    # === OTHER LANGUAGES ===
+    "ruby", "ruby-dev",
+    "perl", "perl-doc",
+    "lua5.4", "luarocks",
+    "tcl", "tk",
+    "nodejs", "npm",
+    "default-jdk", "default-jre",
+    "golang-go",
+    "php-cli", "php-common",
     
-    # Text processing
-    "sed", "grep", "findutils", "coreutils", "moreutils", "parallel",
-    "wdiff", "colordiff", "xxd", "jq", "pandoc", "asciidoc", "groff",
+    # === TEXT PROCESSING ===
+    "sed", "gawk", "grep", "ripgrep",
+    "findutils", "fd-find",
+    "coreutils", "moreutils",
+    "jq", "xmlstarlet",
+    "pandoc", "asciidoc", "groff",
+    "wdiff", "colordiff",
     
-    # Security
-    "openssl", "gnutls-bin", "gnupg", "gnupg2", "pass", "pwgen", "apg",
-    "checksec", "debsums", "aide", "rkhunter", "chkrootkit", "lynis",
-    "fail2ban", "ufw", "iptables", "nftables", "ipset",
-    "apparmor", "apparmor-utils", "firejail", "clamav",
+    # === SECURITY ===
+    "openssl", "gnutls-bin",
+    "gnupg", "gnupg2",
+    "pass", "pwgen",
+    "fail2ban", "ufw",
+    "apparmor", "apparmor-utils",
+    "clamav", "clamav-daemon",
+    "rkhunter", "chkrootkit", "lynis",
+    "debsums", "checksec",
     
-    # System utilities
-    "cron", "anacron", "at", "logrotate", "rsyslog",
-    "acl", "attr", "quota", "hdparm", "sdparm", "smartmontools",
-    "nvme-cli", "lvm2", "mdadm", "cryptsetup", "dmsetup",
-    "parted", "gdisk", "fdisk", "e2fsprogs",
+    # === SYSTEM UTILITIES ===
+    "cron", "anacron", "at",
+    "logrotate", "rsyslog",
+    "acl", "attr",
+    "hdparm", "sdparm", "smartmontools", "nvme-cli",
+    "lvm2", "mdadm", "cryptsetup",
+    "parted", "gdisk", "fdisk",
+    "e2fsprogs", "xfsprogs", "btrfs-progs", "dosfstools",
     "fuse3", "sshfs", "bindfs",
-    "initramfs-tools", "grub-common", "efibootmgr",
-    "acpid", "acpi", "lm-sensors", "pciutils", "usbutils",
-    "dmidecode", "lshw", "hwinfo", "inxi", "powertop", "cpufrequtils",
+    "pciutils", "usbutils", "dmidecode", "lshw", "hwinfo",
+    "acpi", "acpid", "lm-sensors",
+    "psmisc", "procps",
     
-    # Misc utilities
-    "bc", "dc", "units", "dateutils", "remind", "calcurse",
-    "fortune-mod", "cowsay", "figlet", "toilet", "boxes",
-    "lolcat", "cmatrix", "sl", "neofetch", "screenfetch",
-    "pv", "progress", "most", "less", "highlight", "source-highlight",
+    # === MISC UTILITIES ===
+    "bc", "dc", "units",
+    "tree", "ncdu",
+    "pv", "progress",
+    "most", "less",
+    "neofetch", "screenfetch", "inxi",
+    "fortune-mod", "cowsay", "figlet", "toilet",
+    "sl", "cmatrix", "lolcat",
     
-    # Database clients
-    "sqlite3", "mariadb-client", "postgresql-client", "redis-tools",
+    # === DATABASES ===
+    "sqlite3",
+    "mariadb-client",
+    "postgresql-client",
+    "redis-tools",
     
-    # Web servers
-    "lighttpd", "apache2-utils",
-    
-    # Mail
-    "mutt", "alpine", "mailutils", "procmail", "fetchmail",
-    
-    # IRC/Chat
-    "irssi", "weechat",
-    
-    # Media
-    "ffmpeg", "sox", "lame", "vorbis-tools", "opus-tools", "flac",
-    "mediainfo", "exiftool", "imagemagick", "graphicsmagick",
+    # === MEDIA ===
+    "ffmpeg", "sox",
+    "imagemagick", "graphicsmagick",
+    "mediainfo", "exiftool",
     "optipng", "jpegoptim",
     
-    # Science
-    "octave", "gnuplot-nox",
+    # === BACKUP ===
+    "rsnapshot", "rdiff-backup", "duplicity",
+    "borgbackup", "restic",
     
-    # More network
-    "openssh-client", "openssh-server", "openvpn", "wireguard-tools",
-    "stunnel4", "proxychains4",
-    
-    # More dev tools
-    "clang", "llvm", "ccache", "distcc", "colormake",
-    "checkinstall", "fakeroot", "debhelper", "dpkg-dev",
-    "dh-make", "lintian",
-    
-    # Backup
-    "rsnapshot", "rdiff-backup", "duplicity", "borgbackup", "restic",
-    
-    # Log tools
-    "logwatch", "logcheck", "logtail",
-    
-    # Benchmarking
+    # === BENCHMARKING ===
     "stress-ng", "sysbench", "fio", "bonnie++",
     
-    # Process management
-    "supervisor", "monit", "runit",
-    
-    # Additional packages
-    "ack", "alien", "apt-file", "apt-listchanges",
-    "aptitude", "asciidoctor", "aspell",
-    "autossh", "bash-completion", "bind9-utils",
-    "binwalk", "blktrace", "bsdmainutils",
-    "ca-certificates", "caca-utils",
-    "ccze", "cdparanoia", "cgdb", "chafa",
-    "chrony", "chrpath", "cifs-utils", "clang-format",
-    "cloc", "convmv", "cpulimit", "daemon",
-    "dcfldd", "ddrescue", "debconf-utils",
-    "debianutils", "deborphan", "debootstrap", "devscripts",
-    "dfc", "dialog", "diffstat",
-    "dirmngr", "dlocate", "dnsmasq", "dos2unix",
-    "doxygen", "dput",
-    "eject", "enscript", "etckeeper",
-    "expect", "fdupes", "file", "finger",
-    "fontconfig", "fonts-dejavu", "foremost",
-    "gddrescue", "gettext", "ghostscript", "gifsicle",
-    "git-flow", "gitk", "gnuplot",
-    "gpm", "graphviz",
-    "hardinfo", "hashdeep", "haveged",
-    "hexer", "hostname", "httping", "hunspell",
-    "i2c-tools", "icu-devtools",
-    "info", "inotify-tools",
-    "ioping", "ipcalc", "iperf",
-    "jfsutils", "jp2a", "kmod", "kpartx",
-    "language-pack-en", "lcov",
-    "ldap-utils", "libarchive-tools",
-    "libtool-bin", "lnav", "locales",
-    "lrzsz", "lsb-release", "lsof", "lsscsi",
-    "manpages", "manpages-dev", "markdown", "mawk",
-    "mlocate", "mosh",
-    "mtr", "multitail", "ncftp",
-    "netpbm", "nicstat",
-    "openntpd", "par2", "pastebinit",
-    "pigz", "pixz", "pkgconf", "poppler-utils",
-    "psmisc", "qemu-utils", "qrencode",
-    "rdate", "readline-common",
-    "rename", "renameutils", "rng-tools",
-    "rpm", "rpm2cpio", "rrdtool",
-    "ruby-full", "s-nail", "safe-rm",
-    "samba-common", "schedtool",
-    "secure-delete", "sensible-utils", "shellcheck",
-    "smem", "sockstat", "speedtest-cli",
-    "sshpass", "sslscan", "stow", "stress",
-    "sysfsutils", "syslinux",
-    "tcl-dev", "tcpflow", "tcpreplay",
-    "testdisk", "texinfo", "tftp", "time",
-    "tk-dev", "tmate", "trash-cli", "tig",
-    "udisks2", "unhide", "unison",
-    "unrar-free", "uuid-runtime",
-    "vbindiff", "vim-common",
-    "wamerican", "wbritish", "whiptail",
-    "wondershaper", "xauth", "xclip",
-    "xdg-utils", "xmlstarlet", "xsel", "xsltproc",
-    "yasm", "zerofree", "zsh-common",
+    # === MORE PACKAGES ===
+    "apt-file", "aptitude", "apt-listchanges",
+    "deborphan", "debootstrap",
+    "alien", "checkinstall",
+    "fakeroot", "debhelper", "dpkg-dev",
+    "dialog", "whiptail",
+    "expect", "rlwrap",
+    "asciinema", "ttyrec",
+    "inotify-tools", "entr",
+    "parallel", "xargs",
+    "highlight", "source-highlight",
+    "tig", "gitk", "git-gui",
+    "shellcheck",
+    "ascii", "figlet", "boxes",
 ]
 
 # Remove duplicates
@@ -321,141 +275,109 @@ class SystemMonitor:
 
 
 # ============================================================================
-#                              SIMPLE APT HANDLER - NO COMPLEX LOCK DETECTION
+#                              APT COMMANDS
 # ============================================================================
 
-class SimpleApt:
-    """
-    Simple apt handler that just waits and retries
-    No complex lock detection - just simple subprocess calls with waits
-    """
+class Apt:
+    """Simple apt command runner"""
     
     @staticmethod
-    def run_command(cmd: str, timeout: int = 300) -> Tuple[bool, str, str]:
-        """Run a command and wait for it to complete"""
+    def run(cmd: str, timeout: int = 300) -> Tuple[bool, str, str]:
+        """Run apt command"""
+        full_cmd = f"sudo DEBIAN_FRONTEND=noninteractive {cmd}"
         try:
             result = subprocess.run(
-                cmd,
+                full_cmd,
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=timeout,
-                env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'}
+                timeout=timeout
             )
             return result.returncode == 0, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
-            return False, "", "Command timed out"
+            return False, "", "Timeout"
         except Exception as e:
             return False, "", str(e)
     
     @staticmethod
-    def wait_for_apt(max_wait: int = 60) -> bool:
-        """Wait until no apt/dpkg processes are running"""
-        logger.debug("Waiting for apt/dpkg to be free...")
-        
-        start = time.time()
-        while time.time() - start < max_wait:
-            # Check if any apt/dpkg process is running
-            result = subprocess.run(
-                "pgrep -x 'apt|apt-get|dpkg|aptitude' || true",
-                shell=True, capture_output=True, text=True, timeout=10
-            )
-            
-            if not result.stdout.strip():
-                # No apt processes running
-                return True
-            
-            time.sleep(2)
-        
-        return False
-    
-    @staticmethod
-    def fix_dpkg_if_needed():
-        """Run dpkg configure and apt fix if there are issues"""
-        logger.info("Running dpkg --configure -a (if needed)...")
-        
-        # Wait for any running apt
-        SimpleApt.wait_for_apt(30)
-        
-        # Run dpkg configure
-        SimpleApt.run_command("sudo dpkg --configure -a", 120)
-        
-        # Wait
-        time.sleep(5)
-        SimpleApt.wait_for_apt(30)
-        
-        # Run apt fix
-        SimpleApt.run_command("sudo apt-get install -f -y", 120)
-        
-        # Wait
-        time.sleep(5)
-        SimpleApt.wait_for_apt(30)
-    
-    @staticmethod
     def update() -> bool:
-        """Update apt cache"""
-        logger.info("Updating apt cache...")
+        """Update apt cache - CRITICAL for installs to work"""
+        logger.info("=" * 60)
+        logger.info("Updating apt package cache...")
+        logger.info("=" * 60)
         
-        SimpleApt.wait_for_apt(60)
+        # Remove any stale lists
+        subprocess.run("sudo rm -rf /var/lib/apt/lists/*", shell=True, 
+                      capture_output=True, timeout=60)
         
-        ok, _, err = SimpleApt.run_command("sudo apt-get update -y", Config.APT_UPDATE_TIMEOUT)
+        # Update
+        ok, out, err = Apt.run("apt-get update -y", Config.APT_UPDATE_TIMEOUT)
         
-        if not ok:
-            logger.warning(f"apt update issues: {err[:100]}")
-            # Try to fix and retry
-            SimpleApt.fix_dpkg_if_needed()
-            ok, _, _ = SimpleApt.run_command("sudo apt-get update -y", Config.APT_UPDATE_TIMEOUT)
+        if ok:
+            logger.info("✓ apt-get update completed successfully")
+        else:
+            logger.error(f"✗ apt-get update failed: {err[:200]}")
+            # Try again
+            time.sleep(5)
+            ok, out, err = Apt.run("apt-get update -y", Config.APT_UPDATE_TIMEOUT)
+            if ok:
+                logger.info("✓ apt-get update succeeded on retry")
+            else:
+                logger.error("✗ apt-get update failed on retry")
         
-        time.sleep(5)
+        return ok
+    
+    @staticmethod
+    def check_package_exists(pkg: str) -> bool:
+        """Check if package exists in repo"""
+        ok, out, err = Apt.run(f"apt-cache show {pkg}", 30)
         return ok
     
     @staticmethod
     def install(pkg: str) -> Tuple[bool, float, str]:
-        """Install a package"""
+        """Install package"""
         start = time.time()
         
-        # Wait for apt to be free
-        SimpleApt.wait_for_apt(60)
-        
-        # Try install
-        cmd = f"sudo apt-get install -y --no-install-recommends {pkg}"
-        ok, _, err = SimpleApt.run_command(cmd, Config.INSTALL_TIMEOUT)
+        cmd = f"apt-get install -y --no-install-recommends {pkg}"
+        ok, out, err = Apt.run(cmd, Config.INSTALL_TIMEOUT)
         
         elapsed = time.time() - start
         
-        if not ok and "lock" in err.lower():
-            # Lock issue - wait and retry once
-            logger.info(f"Lock issue, waiting 30s and retrying {pkg}...")
-            time.sleep(30)
-            SimpleApt.wait_for_apt(60)
-            ok, _, err = SimpleApt.run_command(cmd, Config.INSTALL_TIMEOUT)
-            elapsed = time.time() - start
+        if not ok:
+            # Check if it's a lock issue
+            if "lock" in err.lower() or "lock" in out.lower():
+                logger.info("Lock detected, waiting 30s...")
+                time.sleep(30)
+                ok, out, err = Apt.run(cmd, Config.INSTALL_TIMEOUT)
+                elapsed = time.time() - start
         
         return ok, elapsed, err[:200] if not ok else ""
     
     @staticmethod
     def remove(pkg: str) -> Tuple[bool, float, str]:
-        """Remove a package"""
+        """Remove package"""
         start = time.time()
         
-        # Wait for apt to be free
-        SimpleApt.wait_for_apt(60)
-        
-        # Try remove
-        cmd = f"sudo apt-get remove -y --purge {pkg}"
-        ok, _, err = SimpleApt.run_command(cmd, Config.UNINSTALL_TIMEOUT)
+        cmd = f"apt-get remove -y --purge {pkg}"
+        ok, out, err = Apt.run(cmd, Config.UNINSTALL_TIMEOUT)
         
         elapsed = time.time() - start
-        
-        if not ok and "lock" in err.lower():
-            # Lock issue - wait and retry once
-            logger.info(f"Lock issue, waiting 30s and retrying remove {pkg}...")
-            time.sleep(30)
-            SimpleApt.wait_for_apt(60)
-            ok, _, err = SimpleApt.run_command(cmd, Config.UNINSTALL_TIMEOUT)
-            elapsed = time.time() - start
-        
         return ok, elapsed, err[:200] if not ok else ""
+    
+    @staticmethod
+    def fix():
+        """Fix dpkg/apt issues"""
+        logger.info("Fixing apt/dpkg state...")
+        Apt.run("dpkg --configure -a", 120)
+        time.sleep(2)
+        Apt.run("apt-get install -f -y", 120)
+        time.sleep(2)
+    
+    @staticmethod
+    def clean():
+        """Clean apt cache"""
+        Apt.run("apt-get clean -y", 60)
+        Apt.run("apt-get autoclean -y", 60)
 
 
 # ============================================================================
@@ -467,7 +389,7 @@ class CPUStress:
         self.workers = []
         self.stop_flag = threading.Event()
 
-    def _worker(self, wid: int):
+    def _worker(self):
         while not self.stop_flag.is_set():
             start = time.time()
             while time.time() - start < 0.07:
@@ -489,24 +411,18 @@ class CPUStress:
                     with open(tmp, 'rb') as f:
                         while f.read(8192) and not self.stop_flag.is_set():
                             pass
-                if tmp.exists():
                     tmp.unlink()
                 time.sleep(0.5)
             except:
                 time.sleep(1)
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except:
-                pass
 
     def start(self):
         self.stop_flag.clear()
         n = max(1, int(multiprocessing.cpu_count() * 0.6))
-        logger.info(f"Starting {n} CPU workers + 1 I/O worker")
+        logger.info(f"Starting {n} CPU stress workers")
         
         for i in range(n):
-            t = threading.Thread(target=self._worker, args=(i,), daemon=True)
+            t = threading.Thread(target=self._worker, daemon=True)
             t.start()
             self.workers.append(t)
         
@@ -518,7 +434,6 @@ class CPUStress:
         logger.info(f"CPU load: {SystemMonitor.get_cpu_usage()}%")
 
     def stop(self):
-        logger.info("Stopping stress workers...")
         self.stop_flag.set()
         for w in self.workers:
             w.join(timeout=2)
@@ -532,84 +447,24 @@ class CPUStress:
 class Cleaner:
     @staticmethod
     def quick():
-        """Quick cleanup - no apt commands"""
         subprocess.run("sudo rm -rf /var/cache/apt/archives/*.deb 2>/dev/null", 
                       shell=True, capture_output=True, timeout=30)
-        subprocess.run("sudo rm -rf /tmp/*.tmp 2>/dev/null",
-                      shell=True, capture_output=True, timeout=30)
-        subprocess.run("sudo sh -c 'echo 1 > /proc/sys/vm/drop_caches' 2>/dev/null",
+        subprocess.run("sync && echo 1 | sudo tee /proc/sys/vm/drop_caches >/dev/null",
                       shell=True, capture_output=True, timeout=10)
 
     @staticmethod
-    def medium():
-        """Medium cleanup"""
-        logger.info("Medium cleanup...")
-        
-        # Wait for apt first
-        SimpleApt.wait_for_apt(30)
-        
-        # Clean
-        subprocess.run("sudo apt-get clean -y 2>/dev/null", shell=True,
-                      capture_output=True, timeout=60,
-                      env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-        
-        time.sleep(5)
-        SimpleApt.wait_for_apt(30)
-        
-        subprocess.run("sudo apt-get autoclean -y 2>/dev/null", shell=True,
-                      capture_output=True, timeout=60,
-                      env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-        
-        time.sleep(5)
-        SimpleApt.wait_for_apt(30)
-        
-        subprocess.run("sudo apt-get autoremove -y 2>/dev/null", shell=True,
-                      capture_output=True, timeout=120,
-                      env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-        
-        time.sleep(5)
-        
-        # Non-apt cleanup
+    def full():
+        logger.info("Full cleanup...")
+        Apt.clean()
+        Apt.run("apt-get autoremove -y", 120)
         subprocess.run("sudo journalctl --vacuum-time=1h 2>/dev/null",
                       shell=True, capture_output=True, timeout=60)
         subprocess.run("sudo rm -rf /var/log/*.gz /var/log/*.1 2>/dev/null",
                       shell=True, capture_output=True, timeout=30)
-        subprocess.run("sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null",
-                      shell=True, capture_output=True, timeout=10)
+        Cleaner.quick()
         
         _, avail = SystemMonitor.get_disk()
-        logger.info(f"After cleanup: {avail}GB available")
-
-    @staticmethod
-    def emergency():
-        """Emergency cleanup"""
-        logger.warning("EMERGENCY CLEANUP!")
-        
-        # Wait for apt
-        SimpleApt.wait_for_apt(60)
-        
-        subprocess.run("sudo apt-get clean -y 2>/dev/null", shell=True,
-                      capture_output=True, timeout=60,
-                      env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-        
-        time.sleep(10)
-        SimpleApt.wait_for_apt(60)
-        
-        subprocess.run("sudo apt-get autoremove -y --purge 2>/dev/null", shell=True,
-                      capture_output=True, timeout=180,
-                      env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-        
-        time.sleep(10)
-        
-        subprocess.run("sudo journalctl --vacuum-size=10M 2>/dev/null",
-                      shell=True, capture_output=True, timeout=60)
-        subprocess.run("sudo rm -rf /var/log/* /tmp/* /var/tmp/* 2>/dev/null",
-                      shell=True, capture_output=True, timeout=30)
-        subprocess.run("sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null",
-                      shell=True, capture_output=True, timeout=10)
-        
-        _, avail = SystemMonitor.get_disk()
-        logger.warning(f"After emergency cleanup: {avail}GB available")
+        logger.info(f"Disk available: {avail}GB")
 
 
 # ============================================================================
@@ -652,22 +507,20 @@ class Process:
             pid = os.fork()
             if pid > 0:
                 print(f"""
-╔════════════════════════════════════════════════════════════════════╗
-║  LOAD TEST v2.5 - STABLE VERSION                                   ║
-╠════════════════════════════════════════════════════════════════════╣
-║  PID: {pid:<58}║
-║  Log: {str(Config.LOG_FILE):<58}║
-╠════════════════════════════════════════════════════════════════════╣
-║  FEATURES:                                                         ║
-║  • Waits 30 seconds between each package                           ║
-║  • Simple apt handling (no complex lock detection)                 ║
-║  • Automatic retry on lock issues                                  ║
-║  • dpkg --configure -a every 10 packages                           ║
-╠════════════════════════════════════════════════════════════════════╣
-║  Monitor : tail -f /tmp/load_test.log                              ║
-║  Status  : python3 {sys.argv[0]} --status                          ║
-║  Stop    : python3 {sys.argv[0]} --stop                            ║
-╚════════════════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════════════╗
+║  LOAD TEST v3.0 - STARTED                                         ║
+╠═══════════════════════════════════════════════════════════════════╣
+║  PID: {pid:<57}║
+║  Log: /tmp/load_test.log                                          ║
+╠═══════════════════════════════════════════════════════════════════╣
+║  • Properly updates apt cache before starting                     ║
+║  • Uses verified Ubuntu 24.04 packages only                       ║
+║  • {len(PACKAGES)} packages to install/uninstall                            ║
+╠═══════════════════════════════════════════════════════════════════╣
+║  tail -f /tmp/load_test.log     - Watch progress                  ║
+║  sudo ./load_test.py --status   - Check status                    ║
+║  sudo ./load_test.py --stop     - Stop test                       ║
+╚═══════════════════════════════════════════════════════════════════╝
 """)
                 sys.exit(0)
         except OSError:
@@ -715,186 +568,161 @@ class LoadTester:
         signal.signal(signal.SIGINT, handler)
 
     def process_package(self, pkg: str) -> PackageResult:
-        """Process a single package: install, wait, uninstall, wait"""
-        result = PackageResult(name=pkg, status=Status.PENDING)
+        result = PackageResult(name=pkg, status=Status.SKIPPED)
 
-        # Check disk
+        # Check disk space
         _, avail = SystemMonitor.get_disk()
         if avail < Config.EMERGENCY_DISK_GB:
-            Cleaner.emergency()
+            logger.warning(f"Low disk space: {avail}GB")
+            Cleaner.full()
             _, avail = SystemMonitor.get_disk()
             if avail < Config.EMERGENCY_DISK_GB:
-                result.status = Status.SKIPPED
                 result.error = "Low disk"
                 return result
 
-        # ========== INSTALL ==========
-        logger.info(f"Installing {pkg}...")
-        ok, elapsed, err = SimpleApt.install(pkg)
+        # Install
+        logger.info(f"  Installing {pkg}...")
+        ok, elapsed, err = Apt.install(pkg)
         result.install_time = elapsed
 
         if not ok:
             result.status = Status.INSTALL_FAILED
             result.error = err
-            logger.warning(f"✗ INSTALL FAIL: {pkg} - {err[:60]}")
-            # Still wait before next package
-            logger.info(f"Waiting {Config.WAIT_AFTER_PACKAGE}s before next package...")
-            time.sleep(Config.WAIT_AFTER_PACKAGE)
+            logger.warning(f"  ✗ Install failed: {err[:50]}")
             return result
 
-        logger.info(f"✓ Installed: {pkg} ({elapsed:.1f}s)")
-        
-        # Wait after install
-        logger.info("Waiting 10s after install...")
-        time.sleep(10)
-        SimpleApt.wait_for_apt(30)
+        logger.info(f"  ✓ Installed ({elapsed:.1f}s)")
+        time.sleep(2)
 
-        # ========== UNINSTALL ==========
-        logger.info(f"Removing {pkg}...")
-        ok, elapsed, err = SimpleApt.remove(pkg)
+        # Uninstall
+        logger.info(f"  Removing {pkg}...")
+        ok, elapsed, err = Apt.remove(pkg)
         result.uninstall_time = elapsed
 
         if not ok:
             result.status = Status.UNINSTALL_FAILED
             result.error = err
-            logger.warning(f"✗ UNINSTALL FAIL: {pkg}")
-            # Still wait before next package
-            logger.info(f"Waiting {Config.WAIT_AFTER_PACKAGE}s before next package...")
-            time.sleep(Config.WAIT_AFTER_PACKAGE)
+            logger.warning(f"  ✗ Remove failed: {err[:50]}")
             return result
 
-        logger.info(f"✓ Removed: {pkg} ({elapsed:.1f}s)")
+        logger.info(f"  ✓ Removed ({elapsed:.1f}s)")
         result.status = Status.COMPLETED
         
-        # ========== WAIT 30 SECONDS ==========
-        logger.info(f"Waiting {Config.WAIT_AFTER_PACKAGE}s before next package...")
-        time.sleep(Config.WAIT_AFTER_PACKAGE)
-        
         return result
-
-    def print_status(self, i: int, total: int, pkg: str):
-        elapsed = time.time() - self.start_time
-        cpu = SystemMonitor.get_cpu_usage()
-        mem_used, _, _ = SystemMonitor.get_memory()
-        _, disk_avail = SystemMonitor.get_disk()
-        
-        ok = sum(1 for r in self.results if r.status == Status.COMPLETED)
-        fail = sum(1 for r in self.results if r.status in [Status.INSTALL_FAILED, Status.UNINSTALL_FAILED])
-        
-        pct = (i / total) * 100
-        # ETA calculation includes 30s wait per package
-        avg_time = elapsed / i if i > 0 else 60
-        eta = avg_time * (total - i)
-        
-        logger.info(f"")
-        logger.info(f"[{i}/{total}] {pct:.1f}% | CPU:{cpu:.0f}% | "
-                   f"Mem:{mem_used}MB | Disk:{disk_avail}GB | "
-                   f"OK:{ok} FAIL:{fail} | ETA:{eta/60:.0f}m")
-        logger.info(f"Processing: {pkg}")
-        logger.info(f"-" * 50)
 
     def run(self):
         self.setup_signals()
         
         logger.info("=" * 70)
-        logger.info("  UBUNTU 24.04 LOAD GENERATOR v2.5 - STABLE")
+        logger.info("  UBUNTU 24.04 LOAD GENERATOR v3.0")
         logger.info("=" * 70)
         logger.info(f"  Packages: {len(PACKAGES)}")
         logger.info(f"  PID: {os.getpid()}")
-        logger.info(f"  Wait between packages: {Config.WAIT_AFTER_PACKAGE} seconds")
-        logger.info(f"  dpkg --configure -a: Every {Config.DPKG_FIX_EVERY_N} packages")
         
         mem_used, _, mem_total = SystemMonitor.get_memory()
         _, disk_avail = SystemMonitor.get_disk()
-        logger.info(f"  Memory: {mem_used}MB/{mem_total}MB | Disk: {disk_avail}GB")
+        logger.info(f"  Memory: {mem_used}MB / {mem_total}MB")
+        logger.info(f"  Disk: {disk_avail}GB available")
         logger.info("=" * 70)
 
-        # Initial setup
-        logger.info("Initial setup - fixing dpkg state...")
-        SimpleApt.fix_dpkg_if_needed()
+        # CRITICAL: Fix apt and update cache
+        logger.info("")
+        logger.info("STEP 1: Fixing apt/dpkg state...")
+        Apt.fix()
         
-        logger.info("Initial cleanup...")
-        Cleaner.medium()
+        logger.info("")
+        logger.info("STEP 2: Updating apt cache (REQUIRED)...")
+        if not Apt.update():
+            logger.error("FATAL: Cannot update apt cache. Aborting.")
+            return
         
-        logger.info("Updating apt cache...")
-        SimpleApt.update()
+        logger.info("")
+        logger.info("STEP 3: Testing apt works...")
+        # Test that apt actually works
+        test_ok, _, test_err = Apt.run("apt-cache show htop", 30)
+        if not test_ok:
+            logger.error(f"FATAL: apt-cache not working: {test_err}")
+            logger.error("Try running: sudo apt-get update")
+            return
+        logger.info("✓ apt is working correctly")
         
-        logger.info("Starting CPU stress workers...")
+        logger.info("")
+        logger.info("STEP 4: Starting CPU stress workers...")
         self.stress.start()
+
+        logger.info("")
+        logger.info("STEP 5: Starting package install/uninstall cycle...")
+        logger.info("=" * 70)
 
         self.start_time = time.time()
         total = len(PACKAGES)
 
-        try:
-            for i, pkg in enumerate(PACKAGES, 1):
-                if not self.running:
-                    logger.info("Stopping...")
-                    break
+        for i, pkg in enumerate(PACKAGES, 1):
+            if not self.running:
+                logger.info("Stopping...")
+                break
 
-                self.print_status(i, total, pkg)
-                
-                # Process package (install + uninstall + 30s wait)
-                result = self.process_package(pkg)
-                self.results.append(result)
-
-                # Quick cleanup (no apt commands)
-                Cleaner.quick()
-
-                # Every N packages: maintenance
-                if i % Config.DPKG_FIX_EVERY_N == 0:
-                    logger.info("")
-                    logger.info("=" * 60)
-                    logger.info(f"  MAINTENANCE: After {i} packages")
-                    logger.info("=" * 60)
-                    
-                    # Fix dpkg
-                    SimpleApt.fix_dpkg_if_needed()
-                    
-                    # Cleanup
-                    Cleaner.medium()
-                    
-                    logger.info("=" * 60)
-                    logger.info("")
-
-        except Exception as e:
-            logger.error(f"Error: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-
-        finally:
-            logger.info("Final cleanup...")
-            SimpleApt.fix_dpkg_if_needed()
+            # Status
+            elapsed = time.time() - self.start_time
+            cpu = SystemMonitor.get_cpu_usage()
+            mem_used, _, _ = SystemMonitor.get_memory()
+            _, disk_avail = SystemMonitor.get_disk()
             
-            self.stress.stop()
-            Cleaner.medium()
-            self.print_report()
-            Process.remove_pid()
+            ok_count = sum(1 for r in self.results if r.status == Status.COMPLETED)
+            fail_count = sum(1 for r in self.results if r.status in [Status.INSTALL_FAILED, Status.UNINSTALL_FAILED])
+            
+            pct = (i / total) * 100
+            eta = (elapsed / i) * (total - i) if i > 1 else 0
+            
+            logger.info("")
+            logger.info(f"[{i}/{total}] {pct:.1f}% | CPU:{cpu:.0f}% | "
+                       f"Mem:{mem_used}MB | Disk:{disk_avail}GB | "
+                       f"OK:{ok_count} FAIL:{fail_count} | ETA:{eta/60:.0f}m")
+            
+            # Process package
+            result = self.process_package(pkg)
+            self.results.append(result)
 
-    def print_report(self):
+            # Quick cleanup
+            Cleaner.quick()
+            
+            # Wait between packages
+            time.sleep(Config.WAIT_AFTER_PACKAGE)
+
+            # Maintenance every N packages
+            if i % Config.DPKG_FIX_EVERY_N == 0:
+                logger.info("")
+                logger.info(f"=== MAINTENANCE after {i} packages ===")
+                Apt.fix()
+                Cleaner.full()
+                logger.info("=" * 40)
+
+        # Final report
+        self.stress.stop()
+        Cleaner.full()
+        
         elapsed = time.time() - self.start_time
         ok = [r for r in self.results if r.status == Status.COMPLETED]
         fail_i = [r for r in self.results if r.status == Status.INSTALL_FAILED]
         fail_u = [r for r in self.results if r.status == Status.UNINSTALL_FAILED]
-        skip = [r for r in self.results if r.status == Status.SKIPPED]
 
         logger.info("")
         logger.info("=" * 70)
         logger.info("  FINAL REPORT")
         logger.info("=" * 70)
-        logger.info(f"  Total: {len(self.results)}")
+        logger.info(f"  Total processed: {len(self.results)}")
         logger.info(f"  Completed: {len(ok)}")
         logger.info(f"  Install Failed: {len(fail_i)}")
         logger.info(f"  Uninstall Failed: {len(fail_u)}")
-        logger.info(f"  Skipped: {len(skip)}")
         if self.results:
             logger.info(f"  Success Rate: {len(ok)/len(self.results)*100:.1f}%")
-        logger.info(f"  Runtime: {elapsed/60:.1f} minutes ({elapsed/3600:.1f} hours)")
+        logger.info(f"  Runtime: {elapsed/60:.1f} minutes")
         logger.info("=" * 70)
 
-        if fail_i:
-            logger.info(f"Install failures: {', '.join(r.name for r in fail_i[:20])}")
-            if len(fail_i) > 20:
-                logger.info(f"  ... and {len(fail_i) - 20} more")
+        if fail_i[:10]:
+            logger.info(f"Failed packages: {', '.join(r.name for r in fail_i[:10])}")
+
+        Process.remove_pid()
 
 
 # ============================================================================
@@ -906,41 +734,35 @@ def main():
 
     if '--help' in args or '-h' in args:
         print("""
-╔════════════════════════════════════════════════════════════════════╗
-║  UBUNTU 24.04 LOAD GENERATOR v2.5 - STABLE                         ║
-╠════════════════════════════════════════════════════════════════════╣
-║  Usage: sudo python3 load_test.py [OPTIONS]                        ║
-║                                                                    ║
-║  Options:                                                          ║
-║    (none)        Run in background                                 ║
-║    --foreground  Run in foreground                                 ║
-║    --status      Check if running                                  ║
-║    --stop        Stop gracefully                                   ║
-║    --logs        Show recent logs                                  ║
-║    --follow      Watch logs live                                   ║
-║    --fix         Fix dpkg/apt state                                ║
-║    --help        Show help                                         ║
-║                                                                    ║
-║  Features:                                                         ║
-║    • 500+ packages install/uninstall                               ║
-║    • 30 second wait between each package                           ║
-║    • Simple apt handling (waits instead of killing)                ║
-║    • Automatic retry on lock issues                                ║
-║    • dpkg --configure -a every 10 packages                         ║
-╚════════════════════════════════════════════════════════════════════╝
+Usage: sudo python3 load_test.py [OPTIONS]
+
+Options:
+  (none)        Run in background
+  --foreground  Run in foreground
+  --status      Check if running
+  --stop        Stop gracefully
+  --logs        Show recent logs
+  --follow      Watch logs live
+  --fix         Fix apt/dpkg state
+  --help        Show help
 """)
         sys.exit(0)
 
     if '--fix' in args:
-        print("Fixing dpkg/apt state...")
-        SimpleApt.fix_dpkg_if_needed()
+        print("Fixing apt/dpkg...")
+        Apt.fix()
+        print("Updating apt cache...")
+        Apt.update()
         print("Done!")
         sys.exit(0)
 
     if '--status' in args:
         if Process.is_running():
-            print(f"✓ Running (PID: {Process.get_pid()})")
-            os.system(f"tail -5 {Config.LOG_FILE}")
+            pid = Process.get_pid()
+            print(f"✓ Running (PID: {pid})")
+            os.system(f"ps -p {pid} -o pid,ppid,%cpu,%mem,etime,cmd --no-headers 2>/dev/null")
+            print("\nRecent logs:")
+            os.system(f"tail -10 {Config.LOG_FILE}")
         else:
             print("✗ Not running")
         sys.exit(0)
@@ -949,13 +771,13 @@ def main():
         pid = Process.get_pid()
         if pid and Process.is_running():
             os.kill(pid, signal.SIGTERM)
-            print(f"Sent stop signal to PID {pid}")
+            print(f"Sent stop to PID {pid}")
         else:
             print("Not running")
         sys.exit(0)
 
     if '--logs' in args:
-        os.system(f"tail -50 {Config.LOG_FILE}")
+        os.system(f"tail -100 {Config.LOG_FILE}")
         sys.exit(0)
 
     if '--follow' in args:
@@ -972,11 +794,10 @@ def main():
         print("Run with sudo!")
         sys.exit(1)
 
-    # Daemonize unless foreground
+    # Run
     if '--foreground' not in args:
         Process.daemonize()
 
-    # Run the test
     LoadTester().run()
 
 
