@@ -4,7 +4,7 @@ Quick Start
 git clone https://github.com/anuragkumar671998/load_test.git && cd load_test && sudo chmod +x load_test.py && sudo ./load_test.py && tail -f /tmp/load_test.log
 
 
-bashDownloadCopy code# 
+bash DownloadCopy code# 
 
 Save and make executable
 
