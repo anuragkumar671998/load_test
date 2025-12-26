@@ -10,12 +10,14 @@ Save and make executable
 
 chmod +x load_test.py
 
-bashDownloadCopy code# Fix stuck locks manually
+# First, fix any existing stuck processes
 sudo python3 load_test.py --fix-locks
 
-# Check status including lock info
-python3 load_test.py --status
+# Then run
+sudo python3 load_test.py
 
+# Watch logs
+tail -f /tmp/load_test.log
 # Start in background
 sudo python3 load_test.py
 
