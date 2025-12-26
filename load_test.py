@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Ubuntu 24.04 LTS Load Generator v2.2
+Ubuntu 24.04 LTS Load Generator v2.3 - FIXED LOCK HANDLING
 500+ packages | 40%+ CPU Load | Background Execution
-With dpkg --configure -a every 10 packages
+Properly handles dpkg/apt locks
 """
 
 import subprocess
@@ -39,7 +39,10 @@ class Config:
     DPKG_CONFIGURE_TIMEOUT = 300
     APT_UPDATE_TIMEOUT = 300
     
-    # Run dpkg --configure -a every N packages
+    # Lock wait settings
+    LOCK_WAIT_TIMEOUT = 60  # Wait up to 60 seconds for lock
+    LOCK_CHECK_INTERVAL = 2  # Check every 2 seconds
+    
     DPKG_FIX_EVERY_N = 10
     CLEANUP_EVERY_N = 10
     DEEP_CLEANUP_EVERY_N = 30
@@ -207,7 +210,7 @@ PACKAGES = [
     "dfc", "dialog", "dictionaries-common", "diffstat",
     "dirmngr", "dislocker", "dlocate", "dnsmasq",
     "docbook-xml", "docbook-xsl", "dos2unix",
-    "doxygen", "dput", "duplicity", "dvd+rw-tools",
+    "doxygen", "dput", "dvd+rw-tools",
     "eject", "enscript", "etckeeper",
     "evtest", "exfat-fuse", "expect", "fatattr",
     "fdupes", "file", "finger",
@@ -228,43 +231,41 @@ PACKAGES = [
     "libtool-bin", "lnav", "lndir", "locales",
     "login", "lrzsz", "lsb-release", "lsof", "lsscsi",
     "manpages", "manpages-dev", "markdown", "mawk",
-    "mime-support", "mlocate", "moreutils", "mosh", "mpack",
-    "mtr", "multitail", "nano", "ncftp", "netcat",
-    "netpbm", "nfs-kernel-server", "nicstat", "nmap",
+    "mime-support", "mlocate", "mosh", "mpack",
+    "mtr", "multitail", "ncftp", "netcat",
+    "netpbm", "nfs-kernel-server", "nicstat",
     "ntpdate", "open-iscsi", "openntpd",
-    "p7zip-rar", "par2", "pastebinit", "patch",
-    "pciutils", "perf-tools-unstable", "pigz", "pixz",
+    "p7zip-rar", "par2", "pastebinit",
+    "perf-tools-unstable", "pigz", "pixz",
     "pkgconf", "pmount", "poppler-utils", "powermgmt-base",
-    "procinfo", "procmail", "psmisc", "pv", "pwauth",
-    "qemu-utils", "qrencode", "quota",
-    "ranger", "rcs", "rdate", "rdiff", "readline-common",
-    "realpath", "rename", "renameutils", "rfkill", "rng-tools",
-    "rpm", "rpm2cpio", "rrdtool", "rsnapshot", "rtorrent",
+    "procinfo", "psmisc", "pwauth",
+    "qemu-utils", "qrencode",
+    "rdate", "rdiff", "readline-common",
+    "rename", "renameutils", "rng-tools",
+    "rpm", "rpm2cpio", "rrdtool", "rtorrent",
     "ruby-full", "s-nail", "s3cmd", "safe-rm", "saidar",
     "samba-common", "sane-utils", "scapy", "schedtool",
-    "screen", "scsitools", "sdparm", "secure-delete",
-    "sensible-utils", "sharutils", "shellcheck", "siege",
-    "slurm", "smartmontools", "smem", "snmp", "snmpd",
-    "socat", "sockstat", "spectre-meltdown-checker", "speedtest-cli",
-    "splitvt", "sqlite3", "squashfs-tools", "sshpass", "sslscan",
-    "stow", "strace", "stress", "subnetcalc", "sudo",
-    "sysfsutils", "syslinux", "syslinux-common", "sysstat",
-    "systemd-coredump", "tcl-dev", "tcpdump", "tcpflow",
-    "tcpreplay", "tcptrack", "telnet", "testdisk",
+    "scsitools", "secure-delete",
+    "sensible-utils", "shellcheck", "siege",
+    "slurm", "smem", "snmpd",
+    "sockstat", "spectre-meltdown-checker", "speedtest-cli",
+    "splitvt", "sshpass", "sslscan",
+    "stow", "stress", "subnetcalc",
+    "sysfsutils", "syslinux", "syslinux-common",
+    "systemd-coredump", "tcl-dev", "tcpflow",
+    "tcpreplay", "tcptrack", "testdisk",
     "texinfo", "tftp", "time", "tinc", "tk-dev",
-    "tmate", "tmpreaper", "toilet", "traceroute",
-    "trash-cli", "trickle", "tshark", "tig",
-    "udisks2", "ufw", "unar", "unhide", "unison",
-    "units", "unrar-free", "unrtf", "unzip", "usbmuxd",
-    "usbutils", "uuid", "uuid-runtime", "vbetool",
-    "vbindiff", "vim-common", "vim-runtime", "vlan",
-    "vnstat", "w3m", "wamerican", "wbritish", "wdiff",
-    "wget", "whiptail", "whois", "wireshark-common",
-    "wkhtmltopdf", "wondershaper", "wput", "x11-apps",
-    "x11-utils", "x11-xserver-utils", "xauth", "xclip",
-    "xdg-utils", "xdotool", "xmlstarlet", "xorriso",
-    "xsel", "xsltproc", "xz-utils", "yasm", "yq",
-    "zerofree", "zip", "zlib1g", "zsh-common",
+    "tmate", "tmpreaper", "trash-cli", "trickle", "tig",
+    "udisks2", "unar", "unhide", "unison",
+    "unrar-free", "unrtf", "usbmuxd",
+    "uuid", "uuid-runtime", "vbetool",
+    "vbindiff", "vim-common", "vim-runtime",
+    "wamerican", "wbritish", "whiptail",
+    "wireshark-common", "wkhtmltopdf", "wondershaper", "wput",
+    "x11-apps", "x11-utils", "x11-xserver-utils", "xauth", "xclip",
+    "xdg-utils", "xdotool", "xmlstarlet",
+    "xsel", "xsltproc", "yasm", "yq",
+    "zerofree", "zlib1g", "zsh-common",
 ]
 
 # Remove duplicates
@@ -379,6 +380,159 @@ class Cmd:
 
 
 # ============================================================================
+#                              LOCK HANDLER - NEW!
+# ============================================================================
+
+class LockHandler:
+    """Handle dpkg/apt locks properly"""
+    
+    LOCK_FILES = [
+        "/var/lib/dpkg/lock",
+        "/var/lib/dpkg/lock-frontend",
+        "/var/lib/apt/lists/lock",
+        "/var/cache/apt/archives/lock",
+    ]
+    
+    @classmethod
+    def get_lock_holder(cls, lock_file: str) -> Optional[int]:
+        """Get PID of process holding a lock"""
+        try:
+            result = subprocess.run(
+                f"sudo fuser {lock_file} 2>/dev/null",
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.stdout.strip():
+                # fuser returns PIDs
+                pids = result.stdout.strip().split()
+                if pids:
+                    return int(pids[0])
+        except:
+            pass
+        return None
+    
+    @classmethod
+    def is_locked(cls) -> Tuple[bool, Optional[int], Optional[str]]:
+        """Check if any dpkg/apt lock is held"""
+        for lock_file in cls.LOCK_FILES:
+            if os.path.exists(lock_file):
+                pid = cls.get_lock_holder(lock_file)
+                if pid:
+                    return True, pid, lock_file
+        return False, None, None
+    
+    @classmethod
+    def get_process_info(cls, pid: int) -> str:
+        """Get info about a process"""
+        try:
+            result = subprocess.run(
+                f"ps -p {pid} -o pid,ppid,cmd --no-headers",
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            return result.stdout.strip()
+        except:
+            return f"PID {pid} (unknown)"
+    
+    @classmethod
+    def wait_for_lock(cls, timeout: int = 60) -> bool:
+        """Wait for locks to be released"""
+        start = time.time()
+        
+        while time.time() - start < timeout:
+            locked, pid, lock_file = cls.is_locked()
+            
+            if not locked:
+                return True
+            
+            logger.info(f"Waiting for lock: {lock_file} held by PID {pid}")
+            logger.info(f"  Process: {cls.get_process_info(pid)}")
+            
+            time.sleep(Config.LOCK_CHECK_INTERVAL)
+        
+        return False
+    
+    @classmethod
+    def kill_lock_holder(cls, pid: int) -> bool:
+        """Kill a process holding a lock"""
+        try:
+            logger.warning(f"Killing stuck process: PID {pid}")
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(2)
+            
+            # Check if still running
+            try:
+                os.kill(pid, 0)
+                # Still running, force kill
+                logger.warning(f"Force killing: PID {pid}")
+                os.kill(pid, signal.SIGKILL)
+                time.sleep(1)
+            except ProcessLookupError:
+                pass
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to kill PID {pid}: {e}")
+            return False
+    
+    @classmethod
+    def remove_stale_locks(cls) -> bool:
+        """Remove stale lock files"""
+        for lock_file in cls.LOCK_FILES:
+            if os.path.exists(lock_file):
+                pid = cls.get_lock_holder(lock_file)
+                if not pid:
+                    # No process holding it, safe to remove
+                    try:
+                        logger.info(f"Removing stale lock: {lock_file}")
+                        os.remove(lock_file)
+                    except:
+                        Cmd.silent(f"rm -f {lock_file}")
+        return True
+    
+    @classmethod
+    def ensure_unlocked(cls, force_kill: bool = False) -> bool:
+        """Ensure no locks are held, optionally killing stuck processes"""
+        locked, pid, lock_file = cls.is_locked()
+        
+        if not locked:
+            return True
+        
+        logger.info(f"Lock detected: {lock_file} by PID {pid}")
+        
+        # First, wait a bit
+        if cls.wait_for_lock(timeout=30):
+            return True
+        
+        # Still locked
+        if force_kill and pid:
+            cls.kill_lock_holder(pid)
+            time.sleep(2)
+            cls.remove_stale_locks()
+            return cls.wait_for_lock(timeout=10)
+        
+        return False
+    
+    @classmethod
+    def fix_dpkg(cls) -> bool:
+        """Fix dpkg state after killing processes"""
+        logger.info("Fixing dpkg state...")
+        
+        # Remove locks
+        cls.remove_stale_locks()
+        
+        # Reconfigure
+        Cmd.silent("dpkg --configure -a", 120)
+        Cmd.silent("apt-get install -f -y", 120)
+        
+        return True
+
+
+# ============================================================================
 #                              CPU STRESS
 # ============================================================================
 
@@ -488,13 +642,24 @@ class Cleaner:
 
 
 # ============================================================================
-#                              PACKAGE MANAGER
+#                              PACKAGE MANAGER - FIXED!
 # ============================================================================
 
 class Apt:
     @staticmethod
+    def wait_for_lock() -> bool:
+        """Wait for apt/dpkg locks before running commands"""
+        return LockHandler.ensure_unlocked(force_kill=True)
+    
+    @staticmethod
     def update() -> bool:
+        """Update apt package cache"""
         logger.info("Updating apt cache...")
+        
+        if not Apt.wait_for_lock():
+            logger.error("Could not get lock for apt update")
+            return False
+        
         ok, _, err = Cmd.run("apt-get update -y", Config.APT_UPDATE_TIMEOUT)
         if not ok:
             logger.warning(f"apt update issues: {err[:100]}")
@@ -502,26 +667,43 @@ class Apt:
 
     @staticmethod
     def install(pkg: str) -> Tuple[bool, float, str]:
+        """Install a package, waiting for locks"""
         start = time.time()
-        ok, _, err = Cmd.run(
-            f"apt-get install -y --no-install-recommends {pkg}",
-            Config.INSTALL_TIMEOUT
-        )
+        
+        # Wait for lock
+        if not Apt.wait_for_lock():
+            return False, time.time() - start, "Could not get lock"
+        
+        cmd = f"apt-get install -y --no-install-recommends {pkg}"
+        ok, _, err = Cmd.run(cmd, Config.INSTALL_TIMEOUT)
+        
         return ok, time.time() - start, err[:200] if not ok else ""
 
     @staticmethod
     def remove(pkg: str) -> Tuple[bool, float, str]:
+        """Uninstall a package, waiting for locks"""
         start = time.time()
-        ok, _, err = Cmd.run(
-            f"apt-get remove -y --purge {pkg}",
-            Config.UNINSTALL_TIMEOUT
-        )
+        
+        # Wait for lock
+        if not Apt.wait_for_lock():
+            return False, time.time() - start, "Could not get lock"
+        
+        cmd = f"apt-get remove -y --purge {pkg}"
+        ok, _, err = Cmd.run(cmd, Config.UNINSTALL_TIMEOUT)
+        
         return ok, time.time() - start, err[:200] if not ok else ""
 
     @staticmethod
     def dpkg_configure() -> bool:
         """Run dpkg --configure -a to fix any broken packages"""
         logger.info("Running: dpkg --configure -a")
+        
+        # Wait for lock first
+        if not Apt.wait_for_lock():
+            logger.warning("Could not get lock for dpkg configure")
+            LockHandler.fix_dpkg()
+            return False
+        
         ok, _, err = Cmd.run("dpkg --configure -a", Config.DPKG_CONFIGURE_TIMEOUT)
         if ok:
             logger.info("✓ dpkg --configure -a completed successfully")
@@ -533,6 +715,12 @@ class Apt:
     def fix_broken() -> bool:
         """Run apt-get install -f to fix broken dependencies"""
         logger.info("Running: apt-get install -f")
+        
+        # Wait for lock first
+        if not Apt.wait_for_lock():
+            logger.warning("Could not get lock for apt fix")
+            return False
+        
         ok, _, err = Cmd.run("apt-get install -f -y", 180)
         if ok:
             logger.info("✓ apt-get install -f completed successfully")
@@ -590,8 +778,8 @@ class Process:
 ║  Features:                                                         ║
 ║  • 500+ packages install/uninstall                                 ║
 ║  • dpkg --configure -a every 10 packages                           ║
+║  • PROPER LOCK HANDLING (waits/kills stuck processes)              ║
 ║  • CPU stress workers                                              ║
-║  • Automatic cleanup                                               ║
 ╠════════════════════════════════════════════════════════════════════╣
 ║  Monitor : tail -f /tmp/load_test.log                              ║
 ║  Status  : python3 {sys.argv[0]} --status                          ║
@@ -703,7 +891,7 @@ class LoadTester:
         self.setup_signals()
         
         logger.info("=" * 70)
-        logger.info("  UBUNTU 24.04 LOAD GENERATOR v2.2")
+        logger.info("  UBUNTU 24.04 LOAD GENERATOR v2.3 - WITH LOCK HANDLING")
         logger.info("=" * 70)
         logger.info(f"  Packages: {len(PACKAGES)}")
         logger.info(f"  PID: {os.getpid()}")
@@ -714,10 +902,10 @@ class LoadTester:
         logger.info(f"  Memory: {mem_used}MB/{mem_total}MB | Disk: {disk_avail}GB")
         logger.info("=" * 70)
 
-        # Initial setup
-        logger.info("Initial dpkg configure...")
-        Apt.dpkg_configure()
-        Apt.fix_broken()
+        # Initial cleanup - kill any stuck processes
+        logger.info("Checking for stuck apt/dpkg processes...")
+        LockHandler.ensure_unlocked(force_kill=True)
+        LockHandler.fix_dpkg()
         
         Cleaner.medium()
         Apt.update()
@@ -746,6 +934,9 @@ class LoadTester:
                     logger.info(f"  MAINTENANCE: After {i} packages")
                     logger.info(f"{'='*60}")
                     
+                    # Ensure locks are free
+                    LockHandler.ensure_unlocked(force_kill=True)
+                    
                     # Run dpkg --configure -a
                     Apt.dpkg_configure()
                     
@@ -768,7 +959,8 @@ class LoadTester:
 
         finally:
             # Final maintenance
-            logger.info("Final dpkg configure...")
+            logger.info("Final cleanup...")
+            LockHandler.ensure_unlocked(force_kill=True)
             Apt.dpkg_configure()
             Apt.fix_broken()
             
@@ -814,7 +1006,7 @@ def main():
     if '--help' in args or '-h' in args:
         print("""
 ╔════════════════════════════════════════════════════════════════════╗
-║  UBUNTU 24.04 LOAD GENERATOR v2.2                                  ║
+║  UBUNTU 24.04 LOAD GENERATOR v2.3 - WITH LOCK HANDLING             ║
 ╠════════════════════════════════════════════════════════════════════╣
 ║  Usage: sudo python3 load_test.py [OPTIONS]                        ║
 ║                                                                    ║
@@ -825,17 +1017,23 @@ def main():
 ║    --stop        Stop gracefully                                   ║
 ║    --logs        Show recent logs                                  ║
 ║    --follow      Watch logs live                                   ║
+║    --fix-locks   Fix stuck apt/dpkg locks                          ║
 ║    --help        Show help                                         ║
 ║                                                                    ║
-║  Features:                                                         ║
-║    • 500+ packages install/uninstall                               ║
-║    • dpkg --configure -a every 10 packages                         ║
-║    • apt-get install -f to fix broken deps                         ║
-║    • CPU stress workers (40%+ load)                                ║
-║    • Automatic disk cleanup                                        ║
-║    • Emergency cleanup on low disk                                 ║
+║  NEW in v2.3:                                                      ║
+║    • Waits for apt/dpkg locks instead of failing                   ║
+║    • Kills stuck processes if locks held too long                  ║
+║    • Removes stale lock files                                      ║
+║    • Properly handles interrupted installs                         ║
 ╚════════════════════════════════════════════════════════════════════╝
 """)
+        sys.exit(0)
+
+    if '--fix-locks' in args:
+        print("Fixing apt/dpkg locks...")
+        LockHandler.ensure_unlocked(force_kill=True)
+        LockHandler.fix_dpkg()
+        print("Done!")
         sys.exit(0)
 
     if '--status' in args:
@@ -844,6 +1042,13 @@ def main():
             os.system(f"tail -5 {Config.LOG_FILE}")
         else:
             print("✗ Not running")
+        
+        # Also check for locks
+        locked, pid, lock_file = LockHandler.is_locked()
+        if locked:
+            print(f"\n⚠ Lock held: {lock_file} by PID {pid}")
+            print(f"  Run with --fix-locks to clear")
+        
         sys.exit(0)
 
     if '--stop' in args:
