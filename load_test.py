@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Ubuntu 24.04 LTS Load Generator v2.4 - FULLY FIXED
+Ubuntu 24.04 LTS Load Generator v2.5 - STABLE VERSION
 500+ packages | 40%+ CPU Load | Background Execution
-Waits for each operation to complete before next
+Waits 30 seconds between each install/uninstall cycle
 """
 
 import subprocess
@@ -33,13 +33,12 @@ class Config:
     EMERGENCY_DISK_GB = 1.0
     
     # Timeouts
-    INSTALL_TIMEOUT = 600      # 10 minutes max per install
-    UNINSTALL_TIMEOUT = 300    # 5 minutes max per uninstall
+    INSTALL_TIMEOUT = 600
+    UNINSTALL_TIMEOUT = 300
     APT_UPDATE_TIMEOUT = 300
     
-    # Lock handling
-    MAX_LOCK_WAIT = 120        # Wait up to 2 minutes for lock
-    LOCK_CHECK_INTERVAL = 3   # Check every 3 seconds
+    # Wait time between packages
+    WAIT_AFTER_PACKAGE = 30  # 30 seconds between each package cycle
     
     # Maintenance
     DPKG_FIX_EVERY_N = 10
@@ -86,7 +85,7 @@ PACKAGES = [
     "mc", "ranger", "vifm", "nnn",
     
     # Network tools
-    "net-tools", "iproute2", "iputils-ping", "traceroute", "mtr-tiny",
+    "net-tools", "iputils-ping", "traceroute", "mtr-tiny",
     "tcpdump", "nmap", "netcat-openbsd", "socat", "telnet", "ftp",
     "lftp", "wget", "curl", "aria2", "axel", "httpie", "links",
     "lynx", "w3m", "elinks", "whois", "dnsutils", "bind9-host",
@@ -96,11 +95,11 @@ PACKAGES = [
     "hping3", "arping", "fping", "arp-scan", "snmp", "tshark",
     
     # Compression
-    "gzip", "bzip2", "xz-utils", "lzma", "lzip", "lzop", "zstd", "lz4",
+    "gzip", "bzip2", "xz-utils", "lzip", "lzop", "zstd", "lz4",
     "pigz", "pbzip2", "zip", "unzip", "p7zip", "p7zip-full",
     "arj", "lhasa", "sharutils", "uudeview", "cabextract",
     "cpio", "pax", "genisoimage", "xorriso", "mtools",
-    "squashfs-tools", "dosfstools", "ntfs-3g", "hfsprogs",
+    "squashfs-tools", "dosfstools", "ntfs-3g",
     "xfsprogs", "btrfs-progs", "f2fs-tools", "exfatprogs",
     
     # Development
@@ -120,7 +119,7 @@ PACKAGES = [
     # Other languages
     "ruby", "ruby-dev", "perl", "perl-doc", "lua5.4", "tcl", "tk",
     "php-cli", "php-common", "nodejs", "npm", "golang-go",
-    "rustc", "cargo", "default-jdk", "default-jre", "ant", "maven",
+    "default-jdk", "default-jre", "ant", "maven",
     
     # Text processing
     "sed", "grep", "findutils", "coreutils", "moreutils", "parallel",
@@ -139,7 +138,7 @@ PACKAGES = [
     "parted", "gdisk", "fdisk", "e2fsprogs",
     "fuse3", "sshfs", "bindfs",
     "initramfs-tools", "grub-common", "efibootmgr",
-    "acpid", "acpi", "lm-sensors", "hddtemp", "pciutils", "usbutils",
+    "acpid", "acpi", "lm-sensors", "pciutils", "usbutils",
     "dmidecode", "lshw", "hwinfo", "inxi", "powertop", "cpufrequtils",
     
     # Misc utilities
@@ -322,293 +321,141 @@ class SystemMonitor:
 
 
 # ============================================================================
-#                              APT LOCK HANDLER - COMPLETELY REWRITTEN
+#                              SIMPLE APT HANDLER - NO COMPLEX LOCK DETECTION
 # ============================================================================
 
-class AptLock:
+class SimpleApt:
     """
-    Handles apt/dpkg locks properly by:
-    1. Checking if lock is held
-    2. Waiting for it to be released
-    3. Force killing if stuck too long
-    """
-    
-    LOCK_FILES = [
-        "/var/lib/dpkg/lock-frontend",
-        "/var/lib/dpkg/lock",
-        "/var/lib/apt/lists/lock",
-        "/var/cache/apt/archives/lock",
-    ]
-    
-    APT_PROCESSES = ["apt", "apt-get", "dpkg", "aptitude", "synaptic"]
-    
-    @classmethod
-    def get_apt_pids(cls) -> List[int]:
-        """Get PIDs of all running apt/dpkg processes"""
-        pids = []
-        try:
-            result = subprocess.run(
-                "ps aux | grep -E 'apt|dpkg' | grep -v grep | awk '{print $2}'",
-                shell=True, capture_output=True, text=True, timeout=10
-            )
-            for line in result.stdout.strip().split('\n'):
-                if line.strip():
-                    try:
-                        pids.append(int(line.strip()))
-                    except:
-                        pass
-        except:
-            pass
-        
-        # Also check with fuser
-        for lock_file in cls.LOCK_FILES:
-            try:
-                result = subprocess.run(
-                    f"fuser {lock_file} 2>/dev/null",
-                    shell=True, capture_output=True, text=True, timeout=10
-                )
-                for pid_str in result.stdout.strip().split():
-                    try:
-                        pid = int(pid_str.strip())
-                        if pid not in pids:
-                            pids.append(pid)
-                    except:
-                        pass
-            except:
-                pass
-        
-        # Filter out our own process
-        our_pid = os.getpid()
-        pids = [p for p in pids if p != our_pid]
-        
-        return pids
-    
-    @classmethod
-    def is_locked(cls) -> bool:
-        """Check if any apt/dpkg lock is held"""
-        pids = cls.get_apt_pids()
-        return len(pids) > 0
-    
-    @classmethod
-    def wait_for_unlock(cls, timeout: int = None) -> bool:
-        """Wait for all apt locks to be released"""
-        if timeout is None:
-            timeout = Config.MAX_LOCK_WAIT
-        
-        start = time.time()
-        
-        while time.time() - start < timeout:
-            if not cls.is_locked():
-                return True
-            
-            pids = cls.get_apt_pids()
-            if pids:
-                logger.debug(f"Waiting for apt/dpkg (PIDs: {pids})...")
-            
-            time.sleep(Config.LOCK_CHECK_INTERVAL)
-        
-        return False
-    
-    @classmethod
-    def kill_apt_processes(cls) -> bool:
-        """Kill all stuck apt/dpkg processes"""
-        pids = cls.get_apt_pids()
-        
-        if not pids:
-            return True
-        
-        logger.warning(f"Killing stuck apt/dpkg processes: {pids}")
-        
-        # First try SIGTERM
-        for pid in pids:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except:
-                pass
-        
-        time.sleep(3)
-        
-        # Then SIGKILL for any remaining
-        pids = cls.get_apt_pids()
-        for pid in pids:
-            try:
-                logger.warning(f"Force killing PID {pid}")
-                os.kill(pid, signal.SIGKILL)
-            except:
-                pass
-        
-        time.sleep(2)
-        return not cls.is_locked()
-    
-    @classmethod
-    def remove_locks(cls):
-        """Remove stale lock files"""
-        for lock_file in cls.LOCK_FILES:
-            try:
-                if os.path.exists(lock_file):
-                    os.remove(lock_file)
-                    logger.info(f"Removed stale lock: {lock_file}")
-            except:
-                subprocess.run(f"sudo rm -f {lock_file}", shell=True, 
-                             capture_output=True, timeout=10)
-    
-    @classmethod
-    def ensure_unlocked(cls) -> bool:
-        """Make sure apt/dpkg is not locked, killing processes if needed"""
-        # First check if locked
-        if not cls.is_locked():
-            return True
-        
-        logger.info("apt/dpkg is locked, waiting...")
-        
-        # Wait for normal unlock
-        if cls.wait_for_unlock(timeout=60):
-            return True
-        
-        # Still locked - kill processes
-        logger.warning("Lock held too long, killing stuck processes...")
-        cls.kill_apt_processes()
-        cls.remove_locks()
-        
-        # Final check
-        time.sleep(2)
-        if cls.is_locked():
-            logger.error("Could not release apt lock!")
-            cls.kill_apt_processes()
-            cls.remove_locks()
-            time.sleep(3)
-        
-        return not cls.is_locked()
-    
-    @classmethod
-    def fix_dpkg(cls):
-        """Fix dpkg state after interruption"""
-        logger.info("Fixing dpkg state...")
-        cls.ensure_unlocked()
-        
-        subprocess.run(
-            "sudo dpkg --configure -a",
-            shell=True, capture_output=True, timeout=300,
-            env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'}
-        )
-        
-        cls.ensure_unlocked()
-        
-        subprocess.run(
-            "sudo apt-get install -f -y",
-            shell=True, capture_output=True, timeout=300,
-            env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'}
-        )
-
-
-# ============================================================================
-#                              APT COMMAND RUNNER - SYNCHRONOUS
-# ============================================================================
-
-class Apt:
-    """
-    Run apt commands SYNCHRONOUSLY - waits for completion before returning
+    Simple apt handler that just waits and retries
+    No complex lock detection - just simple subprocess calls with waits
     """
     
     @staticmethod
-    def _run_apt_command(cmd: str, timeout: int) -> Tuple[bool, str, str]:
-        """
-        Run an apt command and WAIT for it to complete
-        Returns (success, stdout, stderr)
-        """
-        # First ensure no other apt is running
-        if not AptLock.ensure_unlocked():
-            return False, "", "Could not get apt lock"
-        
+    def run_command(cmd: str, timeout: int = 300) -> Tuple[bool, str, str]:
+        """Run a command and wait for it to complete"""
         try:
-            # Run command and WAIT for completion
             result = subprocess.run(
-                f"sudo {cmd}",
+                cmd,
                 shell=True,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'}
             )
-            
-            # Wait a moment and verify apt is done
-            time.sleep(1)
-            
-            # Double-check no apt process is running
-            wait_count = 0
-            while AptLock.is_locked() and wait_count < 30:
-                time.sleep(1)
-                wait_count += 1
-            
             return result.returncode == 0, result.stdout, result.stderr
-            
         except subprocess.TimeoutExpired:
-            logger.warning(f"Command timed out: {cmd[:50]}...")
-            AptLock.kill_apt_processes()
-            return False, "", "Timeout"
+            return False, "", "Command timed out"
         except Exception as e:
-            logger.error(f"Command error: {e}")
             return False, "", str(e)
     
     @staticmethod
+    def wait_for_apt(max_wait: int = 60) -> bool:
+        """Wait until no apt/dpkg processes are running"""
+        logger.debug("Waiting for apt/dpkg to be free...")
+        
+        start = time.time()
+        while time.time() - start < max_wait:
+            # Check if any apt/dpkg process is running
+            result = subprocess.run(
+                "pgrep -x 'apt|apt-get|dpkg|aptitude' || true",
+                shell=True, capture_output=True, text=True, timeout=10
+            )
+            
+            if not result.stdout.strip():
+                # No apt processes running
+                return True
+            
+            time.sleep(2)
+        
+        return False
+    
+    @staticmethod
+    def fix_dpkg_if_needed():
+        """Run dpkg configure and apt fix if there are issues"""
+        logger.info("Running dpkg --configure -a (if needed)...")
+        
+        # Wait for any running apt
+        SimpleApt.wait_for_apt(30)
+        
+        # Run dpkg configure
+        SimpleApt.run_command("sudo dpkg --configure -a", 120)
+        
+        # Wait
+        time.sleep(5)
+        SimpleApt.wait_for_apt(30)
+        
+        # Run apt fix
+        SimpleApt.run_command("sudo apt-get install -f -y", 120)
+        
+        # Wait
+        time.sleep(5)
+        SimpleApt.wait_for_apt(30)
+    
+    @staticmethod
     def update() -> bool:
-        """Update apt package cache"""
+        """Update apt cache"""
         logger.info("Updating apt cache...")
-        AptLock.ensure_unlocked()
-        ok, _, err = Apt._run_apt_command("apt-get update -y", Config.APT_UPDATE_TIMEOUT)
+        
+        SimpleApt.wait_for_apt(60)
+        
+        ok, _, err = SimpleApt.run_command("sudo apt-get update -y", Config.APT_UPDATE_TIMEOUT)
+        
         if not ok:
             logger.warning(f"apt update issues: {err[:100]}")
-        return True
+            # Try to fix and retry
+            SimpleApt.fix_dpkg_if_needed()
+            ok, _, _ = SimpleApt.run_command("sudo apt-get update -y", Config.APT_UPDATE_TIMEOUT)
+        
+        time.sleep(5)
+        return ok
     
     @staticmethod
     def install(pkg: str) -> Tuple[bool, float, str]:
-        """Install a package - waits for completion"""
+        """Install a package"""
         start = time.time()
         
-        ok, _, err = Apt._run_apt_command(
-            f"apt-get install -y --no-install-recommends {pkg}",
-            Config.INSTALL_TIMEOUT
-        )
+        # Wait for apt to be free
+        SimpleApt.wait_for_apt(60)
+        
+        # Try install
+        cmd = f"sudo apt-get install -y --no-install-recommends {pkg}"
+        ok, _, err = SimpleApt.run_command(cmd, Config.INSTALL_TIMEOUT)
         
         elapsed = time.time() - start
+        
+        if not ok and "lock" in err.lower():
+            # Lock issue - wait and retry once
+            logger.info(f"Lock issue, waiting 30s and retrying {pkg}...")
+            time.sleep(30)
+            SimpleApt.wait_for_apt(60)
+            ok, _, err = SimpleApt.run_command(cmd, Config.INSTALL_TIMEOUT)
+            elapsed = time.time() - start
+        
         return ok, elapsed, err[:200] if not ok else ""
     
     @staticmethod
     def remove(pkg: str) -> Tuple[bool, float, str]:
-        """Remove a package - waits for completion"""
+        """Remove a package"""
         start = time.time()
         
-        ok, _, err = Apt._run_apt_command(
-            f"apt-get remove -y --purge {pkg}",
-            Config.UNINSTALL_TIMEOUT
-        )
+        # Wait for apt to be free
+        SimpleApt.wait_for_apt(60)
+        
+        # Try remove
+        cmd = f"sudo apt-get remove -y --purge {pkg}"
+        ok, _, err = SimpleApt.run_command(cmd, Config.UNINSTALL_TIMEOUT)
         
         elapsed = time.time() - start
+        
+        if not ok and "lock" in err.lower():
+            # Lock issue - wait and retry once
+            logger.info(f"Lock issue, waiting 30s and retrying remove {pkg}...")
+            time.sleep(30)
+            SimpleApt.wait_for_apt(60)
+            ok, _, err = SimpleApt.run_command(cmd, Config.UNINSTALL_TIMEOUT)
+            elapsed = time.time() - start
+        
         return ok, elapsed, err[:200] if not ok else ""
-    
-    @staticmethod
-    def dpkg_configure() -> bool:
-        """Run dpkg --configure -a"""
-        logger.info("Running: dpkg --configure -a")
-        AptLock.ensure_unlocked()
-        ok, _, err = Apt._run_apt_command("dpkg --configure -a", 300)
-        if ok:
-            logger.info("✓ dpkg --configure -a completed")
-        else:
-            logger.warning(f"dpkg --configure -a issues: {err[:100]}")
-        return ok
-    
-    @staticmethod
-    def fix_broken() -> bool:
-        """Run apt-get install -f"""
-        logger.info("Running: apt-get install -f")
-        AptLock.ensure_unlocked()
-        ok, _, err = Apt._run_apt_command("apt-get install -f -y", 300)
-        if ok:
-            logger.info("✓ apt-get install -f completed")
-        else:
-            logger.warning(f"apt-get install -f issues: {err[:100]}")
-        return ok
 
 
 # ============================================================================
@@ -648,7 +495,10 @@ class CPUStress:
             except:
                 time.sleep(1)
         if tmp.exists():
-            tmp.unlink()
+            try:
+                tmp.unlink()
+            except:
+                pass
 
     def start(self):
         self.stop_flag.clear()
@@ -682,41 +532,49 @@ class CPUStress:
 class Cleaner:
     @staticmethod
     def quick():
-        # Wait for any apt to finish first
-        AptLock.wait_for_unlock(timeout=30)
-        
-        subprocess.run("sudo apt-get clean -y", shell=True, 
-                      capture_output=True, timeout=60,
-                      env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-        subprocess.run("sudo rm -rf /var/cache/apt/archives/*.deb", 
+        """Quick cleanup - no apt commands"""
+        subprocess.run("sudo rm -rf /var/cache/apt/archives/*.deb 2>/dev/null", 
                       shell=True, capture_output=True, timeout=30)
-        subprocess.run("sudo sh -c 'echo 1 > /proc/sys/vm/drop_caches'",
+        subprocess.run("sudo rm -rf /tmp/*.tmp 2>/dev/null",
+                      shell=True, capture_output=True, timeout=30)
+        subprocess.run("sudo sh -c 'echo 1 > /proc/sys/vm/drop_caches' 2>/dev/null",
                       shell=True, capture_output=True, timeout=10)
 
     @staticmethod
     def medium():
+        """Medium cleanup"""
         logger.info("Medium cleanup...")
-        AptLock.ensure_unlocked()
         
-        Cleaner.quick()
+        # Wait for apt first
+        SimpleApt.wait_for_apt(30)
         
-        subprocess.run("sudo apt-get autoclean -y", shell=True,
+        # Clean
+        subprocess.run("sudo apt-get clean -y 2>/dev/null", shell=True,
+                      capture_output=True, timeout=60,
+                      env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
+        
+        time.sleep(5)
+        SimpleApt.wait_for_apt(30)
+        
+        subprocess.run("sudo apt-get autoclean -y 2>/dev/null", shell=True,
+                      capture_output=True, timeout=60,
+                      env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
+        
+        time.sleep(5)
+        SimpleApt.wait_for_apt(30)
+        
+        subprocess.run("sudo apt-get autoremove -y 2>/dev/null", shell=True,
                       capture_output=True, timeout=120,
                       env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
         
-        AptLock.wait_for_unlock(timeout=60)
+        time.sleep(5)
         
-        subprocess.run("sudo apt-get autoremove -y", shell=True,
-                      capture_output=True, timeout=180,
-                      env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-        
-        AptLock.wait_for_unlock(timeout=60)
-        
-        subprocess.run("sudo journalctl --vacuum-time=1h",
+        # Non-apt cleanup
+        subprocess.run("sudo journalctl --vacuum-time=1h 2>/dev/null",
                       shell=True, capture_output=True, timeout=60)
-        subprocess.run("sudo rm -rf /var/log/*.gz /var/log/*.1",
+        subprocess.run("sudo rm -rf /var/log/*.gz /var/log/*.1 2>/dev/null",
                       shell=True, capture_output=True, timeout=30)
-        subprocess.run("sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'",
+        subprocess.run("sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null",
                       shell=True, capture_output=True, timeout=10)
         
         _, avail = SystemMonitor.get_disk()
@@ -724,21 +582,30 @@ class Cleaner:
 
     @staticmethod
     def emergency():
+        """Emergency cleanup"""
         logger.warning("EMERGENCY CLEANUP!")
-        AptLock.kill_apt_processes()
-        AptLock.remove_locks()
         
-        subprocess.run("sudo apt-get clean -y", shell=True,
+        # Wait for apt
+        SimpleApt.wait_for_apt(60)
+        
+        subprocess.run("sudo apt-get clean -y 2>/dev/null", shell=True,
                       capture_output=True, timeout=60,
                       env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-        subprocess.run("sudo apt-get autoremove -y --purge", shell=True,
+        
+        time.sleep(10)
+        SimpleApt.wait_for_apt(60)
+        
+        subprocess.run("sudo apt-get autoremove -y --purge 2>/dev/null", shell=True,
                       capture_output=True, timeout=180,
                       env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-        subprocess.run("sudo journalctl --vacuum-size=10M",
+        
+        time.sleep(10)
+        
+        subprocess.run("sudo journalctl --vacuum-size=10M 2>/dev/null",
                       shell=True, capture_output=True, timeout=60)
-        subprocess.run("sudo rm -rf /var/log/* /tmp/* /var/tmp/*",
+        subprocess.run("sudo rm -rf /var/log/* /tmp/* /var/tmp/* 2>/dev/null",
                       shell=True, capture_output=True, timeout=30)
-        subprocess.run("sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'",
+        subprocess.run("sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null",
                       shell=True, capture_output=True, timeout=10)
         
         _, avail = SystemMonitor.get_disk()
@@ -786,15 +653,15 @@ class Process:
             if pid > 0:
                 print(f"""
 ╔════════════════════════════════════════════════════════════════════╗
-║  LOAD TEST v2.4 - STARTED IN BACKGROUND                            ║
+║  LOAD TEST v2.5 - STABLE VERSION                                   ║
 ╠════════════════════════════════════════════════════════════════════╣
 ║  PID: {pid:<58}║
 ║  Log: {str(Config.LOG_FILE):<58}║
 ╠════════════════════════════════════════════════════════════════════╣
-║  FIXED IN v2.4:                                                    ║
-║  • Waits for each install/uninstall to FULLY complete              ║
-║  • Properly handles apt/dpkg locks                                 ║
-║  • Kills stuck processes automatically                             ║
+║  FEATURES:                                                         ║
+║  • Waits 30 seconds between each package                           ║
+║  • Simple apt handling (no complex lock detection)                 ║
+║  • Automatic retry on lock issues                                  ║
 ║  • dpkg --configure -a every 10 packages                           ║
 ╠════════════════════════════════════════════════════════════════════╣
 ║  Monitor : tail -f /tmp/load_test.log                              ║
@@ -848,6 +715,7 @@ class LoadTester:
         signal.signal(signal.SIGINT, handler)
 
     def process_package(self, pkg: str) -> PackageResult:
+        """Process a single package: install, wait, uninstall, wait"""
         result = PackageResult(name=pkg, status=Status.PENDING)
 
         # Check disk
@@ -861,40 +729,47 @@ class LoadTester:
                 return result
 
         # ========== INSTALL ==========
-        logger.debug(f"Installing {pkg}...")
-        ok, elapsed, err = Apt.install(pkg)
+        logger.info(f"Installing {pkg}...")
+        ok, elapsed, err = SimpleApt.install(pkg)
         result.install_time = elapsed
 
         if not ok:
             result.status = Status.INSTALL_FAILED
             result.error = err
             logger.warning(f"✗ INSTALL FAIL: {pkg} - {err[:60]}")
+            # Still wait before next package
+            logger.info(f"Waiting {Config.WAIT_AFTER_PACKAGE}s before next package...")
+            time.sleep(Config.WAIT_AFTER_PACKAGE)
             return result
 
         logger.info(f"✓ Installed: {pkg} ({elapsed:.1f}s)")
         
-        # Wait to ensure install is complete
-        time.sleep(2)
-        AptLock.wait_for_unlock(timeout=30)
+        # Wait after install
+        logger.info("Waiting 10s after install...")
+        time.sleep(10)
+        SimpleApt.wait_for_apt(30)
 
         # ========== UNINSTALL ==========
-        logger.debug(f"Removing {pkg}...")
-        ok, elapsed, err = Apt.remove(pkg)
+        logger.info(f"Removing {pkg}...")
+        ok, elapsed, err = SimpleApt.remove(pkg)
         result.uninstall_time = elapsed
 
         if not ok:
             result.status = Status.UNINSTALL_FAILED
             result.error = err
             logger.warning(f"✗ UNINSTALL FAIL: {pkg}")
+            # Still wait before next package
+            logger.info(f"Waiting {Config.WAIT_AFTER_PACKAGE}s before next package...")
+            time.sleep(Config.WAIT_AFTER_PACKAGE)
             return result
 
         logger.info(f"✓ Removed: {pkg} ({elapsed:.1f}s)")
-        
-        # Wait to ensure uninstall is complete
-        time.sleep(2)
-        AptLock.wait_for_unlock(timeout=30)
-        
         result.status = Status.COMPLETED
+        
+        # ========== WAIT 30 SECONDS ==========
+        logger.info(f"Waiting {Config.WAIT_AFTER_PACKAGE}s before next package...")
+        time.sleep(Config.WAIT_AFTER_PACKAGE)
+        
         return result
 
     def print_status(self, i: int, total: int, pkg: str):
@@ -907,20 +782,26 @@ class LoadTester:
         fail = sum(1 for r in self.results if r.status in [Status.INSTALL_FAILED, Status.UNINSTALL_FAILED])
         
         pct = (i / total) * 100
-        eta = (elapsed / i) * (total - i) if i > 0 else 0
+        # ETA calculation includes 30s wait per package
+        avg_time = elapsed / i if i > 0 else 60
+        eta = avg_time * (total - i)
         
+        logger.info(f"")
         logger.info(f"[{i}/{total}] {pct:.1f}% | CPU:{cpu:.0f}% | "
                    f"Mem:{mem_used}MB | Disk:{disk_avail}GB | "
-                   f"OK:{ok} FAIL:{fail} | ETA:{eta/60:.0f}m | {pkg}")
+                   f"OK:{ok} FAIL:{fail} | ETA:{eta/60:.0f}m")
+        logger.info(f"Processing: {pkg}")
+        logger.info(f"-" * 50)
 
     def run(self):
         self.setup_signals()
         
         logger.info("=" * 70)
-        logger.info("  UBUNTU 24.04 LOAD GENERATOR v2.4 - FULLY FIXED")
+        logger.info("  UBUNTU 24.04 LOAD GENERATOR v2.5 - STABLE")
         logger.info("=" * 70)
         logger.info(f"  Packages: {len(PACKAGES)}")
         logger.info(f"  PID: {os.getpid()}")
+        logger.info(f"  Wait between packages: {Config.WAIT_AFTER_PACKAGE} seconds")
         logger.info(f"  dpkg --configure -a: Every {Config.DPKG_FIX_EVERY_N} packages")
         
         mem_used, _, mem_total = SystemMonitor.get_memory()
@@ -928,14 +809,17 @@ class LoadTester:
         logger.info(f"  Memory: {mem_used}MB/{mem_total}MB | Disk: {disk_avail}GB")
         logger.info("=" * 70)
 
-        # Initial cleanup - kill any stuck apt processes
-        logger.info("Killing any stuck apt/dpkg processes...")
-        AptLock.kill_apt_processes()
-        AptLock.remove_locks()
-        AptLock.fix_dpkg()
+        # Initial setup
+        logger.info("Initial setup - fixing dpkg state...")
+        SimpleApt.fix_dpkg_if_needed()
         
+        logger.info("Initial cleanup...")
         Cleaner.medium()
-        Apt.update()
+        
+        logger.info("Updating apt cache...")
+        SimpleApt.update()
+        
+        logger.info("Starting CPU stress workers...")
         self.stress.start()
 
         self.start_time = time.time()
@@ -949,11 +833,11 @@ class LoadTester:
 
                 self.print_status(i, total, pkg)
                 
-                # Process package (install + uninstall)
+                # Process package (install + uninstall + 30s wait)
                 result = self.process_package(pkg)
                 self.results.append(result)
 
-                # Quick cleanup
+                # Quick cleanup (no apt commands)
                 Cleaner.quick()
 
                 # Every N packages: maintenance
@@ -963,14 +847,8 @@ class LoadTester:
                     logger.info(f"  MAINTENANCE: After {i} packages")
                     logger.info("=" * 60)
                     
-                    # Kill any stuck processes
-                    AptLock.ensure_unlocked()
-                    
-                    # Run dpkg --configure -a
-                    Apt.dpkg_configure()
-                    
-                    # Fix broken
-                    Apt.fix_broken()
+                    # Fix dpkg
+                    SimpleApt.fix_dpkg_if_needed()
                     
                     # Cleanup
                     Cleaner.medium()
@@ -980,11 +858,12 @@ class LoadTester:
 
         except Exception as e:
             logger.error(f"Error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
         finally:
             logger.info("Final cleanup...")
-            AptLock.kill_apt_processes()
-            AptLock.fix_dpkg()
+            SimpleApt.fix_dpkg_if_needed()
             
             self.stress.stop()
             Cleaner.medium()
@@ -1028,7 +907,7 @@ def main():
     if '--help' in args or '-h' in args:
         print("""
 ╔════════════════════════════════════════════════════════════════════╗
-║  UBUNTU 24.04 LOAD GENERATOR v2.4                                  ║
+║  UBUNTU 24.04 LOAD GENERATOR v2.5 - STABLE                         ║
 ╠════════════════════════════════════════════════════════════════════╣
 ║  Usage: sudo python3 load_test.py [OPTIONS]                        ║
 ║                                                                    ║
@@ -1039,18 +918,22 @@ def main():
 ║    --stop        Stop gracefully                                   ║
 ║    --logs        Show recent logs                                  ║
 ║    --follow      Watch logs live                                   ║
-║    --fix-locks   Kill stuck apt/dpkg and fix locks                 ║
+║    --fix         Fix dpkg/apt state                                ║
 ║    --help        Show help                                         ║
+║                                                                    ║
+║  Features:                                                         ║
+║    • 500+ packages install/uninstall                               ║
+║    • 30 second wait between each package                           ║
+║    • Simple apt handling (waits instead of killing)                ║
+║    • Automatic retry on lock issues                                ║
+║    • dpkg --configure -a every 10 packages                         ║
 ╚════════════════════════════════════════════════════════════════════╝
 """)
         sys.exit(0)
 
-    if '--fix-locks' in args:
-        print("Fixing apt/dpkg locks...")
-        AptLock.kill_apt_processes()
-        AptLock.remove_locks()
-        time.sleep(2)
-        AptLock.fix_dpkg()
+    if '--fix' in args:
+        print("Fixing dpkg/apt state...")
+        SimpleApt.fix_dpkg_if_needed()
         print("Done!")
         sys.exit(0)
 
@@ -1060,13 +943,6 @@ def main():
             os.system(f"tail -5 {Config.LOG_FILE}")
         else:
             print("✗ Not running")
-        
-        # Check for stuck processes
-        pids = AptLock.get_apt_pids()
-        if pids:
-            print(f"\n⚠ apt/dpkg processes running: {pids}")
-            print("  Run with --fix-locks to clear")
-        
         sys.exit(0)
 
     if '--stop' in args:
